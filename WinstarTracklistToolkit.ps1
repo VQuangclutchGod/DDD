@@ -142,8 +142,54 @@ $form.KeyPreview=$true
 
 # Top AppBar (chứa Theme, nằm góc phải trên cùng)
 $topBar = New-Object System.Windows.Forms.Panel
-$topBar.Dock='Top'; $topBar.Height=44; $topBar.Padding='10,6,10,6'
+$topBar.Dock='Top'; $topBar.Height=48; $topBar.Padding='12,8,12,8'
+$topBar.BackColor=[Drawing.Color]::FromArgb(245,247,250)
+$topBar.Add_Paint({
+  $g=$_.Graphics
+  $rect=$topBar.ClientRectangle
+  $pen=[Drawing.Pen]::new([Drawing.Color]::FromArgb(210,214,220))
+  try { $g.DrawLine($pen,$rect.Left,$rect.Bottom-1,$rect.Right,$rect.Bottom-1) } finally { $pen.Dispose() }
+})
 $form.Controls.Add($topBar)
+
+$logoPath = Join-Path $assets 'app.ico'
+$appIcon=$null
+if(Test-Path $logoPath){
+  try {
+    $appIcon=[Drawing.Icon]::ExtractAssociatedIcon($logoPath)
+  } catch {
+    try { $appIcon=[Drawing.Icon]::new($logoPath) } catch {}
+  }
+}
+if($appIcon){
+  $form.Icon=$appIcon
+}
+
+$topLeft = New-Object System.Windows.Forms.FlowLayoutPanel
+$topLeft.Dock='Left'
+$topLeft.FlowDirection='LeftToRight'
+$topLeft.WrapContents=$false
+$topLeft.AutoSize=$true
+$topLeft.AutoSizeMode='GrowAndShrink'
+$topLeft.Margin='0,0,0,0'
+$topLeft.Padding='0,0,16,0'
+$topBar.Controls.Add($topLeft)
+
+if($appIcon){
+  $picLogo=New-Object System.Windows.Forms.PictureBox
+  $picLogo.SizeMode='Zoom'
+  $picLogo.Size=[Drawing.Size]::new(28,28)
+  $picLogo.Margin='0,0,10,0'
+  $picLogo.Image=$appIcon.ToBitmap()
+  $topLeft.Controls.Add($picLogo)
+}
+$lblTitle = New-Object System.Windows.Forms.Label
+$lblTitle.Text='Winstar Tracklist Toolkit'
+$lblTitle.Font=New-Object Drawing.Font($form.Font.FontFamily,12,[Drawing.FontStyle]::Bold)
+$lblTitle.AutoSize=$true
+$lblTitle.Margin='0,4,0,0'
+$topLeft.Controls.Add($lblTitle)
+
 $topRight = New-Object System.Windows.Forms.FlowLayoutPanel
 $topRight.Dock='Right'
 $topRight.FlowDirection='LeftToRight'
@@ -320,7 +366,7 @@ $tabs.Add_DrawItem({
 # TAB 1
 # =========================================================
 $tab1=New-Object System.Windows.Forms.TabPage
-$tab1.Text="Tạo Tracklist"; $tab1.ImageKey='create'
+$tab1.Text="Create Tracklist"; $tab1.ImageKey='create'
 $tabs.TabPages.Add($tab1)
 
 $tracks = [System.Collections.Generic.List[psobject]]::new()
@@ -437,7 +483,7 @@ $lblDen    = New-Object System.Windows.Forms.Label; $lblDen.Text="đến"; $lblD
 $numMax    = New-Object System.Windows.Forms.NumericUpDown; $numMax.Minimum=1; $numMax.Maximum=999; $numMax.Value=$defaultMaxSongs; $numMax.Width=55
 $lblSongs  = New-Object System.Windows.Forms.Label; $lblSongs.Text="bài hát"; $lblSongs.AutoSize=$true
 $chkPriority = New-Object System.Windows.Forms.CheckBox; $chkPriority.Text="Ưu tiên sắp xếp những bài đánh dấu"; $chkPriority.AutoSize=$true
-$btnPreview  = New-Object System.Windows.Forms.Button; $btnPreview.Text="Random (Preview)"; $btnPreview.Width=180
+$btnPreview  = New-Object System.Windows.Forms.Button; $btnPreview.Text="Random (Preview)"; $btnPreview.Width=180; $btnPreview.Visible=$false
 
 # Hàng 2: Import/Remove/Up/Down/Clear
 $btnImport=New-Object System.Windows.Forms.Button; $btnImport.Text="Import"
@@ -478,8 +524,12 @@ function Reflow-Bottom {
   $lblDen.SetBounds($x,$y+6,28,24);     $x+=28+$gap
   $numMax.SetBounds($x,$y,55,28);       $x+=55+$gap
   $lblSongs.SetBounds($x,$y+6,50,24);   $x+=50+($gap*2)
-  $chkPriority.SetBounds($x,$y+6,280,24); $x+=280+($gap*2)
-  $btnPreview.SetBounds($x,$y-2,180,32)
+  $pref=$chkPriority.GetPreferredSize([Drawing.Size]::Empty)
+  $chkPriority.SetBounds($x,$y+6,$pref.Width,$pref.Height)
+  $x+=$pref.Width+($gap*2)
+  if($btnPreview.Visible){
+    $btnPreview.SetBounds($x,$y-2,180,32)
+  }
 
   # hàng 2
   $y=46
@@ -530,6 +580,17 @@ $tab1.Add_Resize({ Resize-Columns })
 
 function Update-TotalLabel{ $sum=0.0; foreach($t in $tracks){$sum+=$t.DurSec}; $lblTotal.Text="Total: " + (SecToHMS $sum) }
 function Refresh-ListView{
+  param([bool]$preserveSelection=$true)
+
+  $selected=@()
+  if($preserveSelection){
+    foreach($idx in $list.SelectedIndices){ $selected += [int]$idx }
+  }
+  $topIndex=-1
+  try{
+    if($list.TopItem){ $topIndex=$list.TopItem.Index }
+  } catch {}
+
   $list.BeginUpdate()
   try{
     $list.Items.Clear(); $run=0.0
@@ -543,32 +604,72 @@ function Refresh-ListView{
       [void]$list.Items.Add($it)
     }
   } finally { $list.EndUpdate() }
+
   Update-TotalLabel
+  $btnPreview.Enabled = ($tracks.Count -gt 1)
+
+  if($preserveSelection){
+    foreach($idx in $selected){
+      if($idx -ge 0 -and $idx -lt $list.Items.Count){
+        $list.Items[$idx].Selected=$true
+      }
+    }
+  }
+
+  if($script:lastIndex -ge 0 -and $script:lastIndex -lt $list.Items.Count){
+    [void]$list.SelectedIndices.Clear()
+    $list.Items[$script:lastIndex].Selected=$true
+    $list.EnsureVisible($script:lastIndex)
+  } elseif($preserveSelection -and $selected.Count -gt 0){
+    $first=$selected[0]
+    if($first -ge 0 -and $first -lt $list.Items.Count){
+      $list.EnsureVisible($first)
+    }
+  }
+
+  if($topIndex -ge 0 -and $topIndex -lt $list.Items.Count){
+    try { $list.TopItem = $list.Items[$topIndex] } catch {}
+  }
 }
 
 function Add-Files([string[]]$paths){
   $okExt=@(".mp3",".wav")
+  $added=0
   foreach($p in $paths){
     $ext=[IO.Path]::GetExtension($p).ToLower(); if(-not $okExt.Contains($ext)){continue}
     if($tracks | Where-Object { $_.Path -eq $p }){continue}
     $title=[IO.Path]::GetFileNameWithoutExtension($p); $dur=Get-DurationSec $p
     $tracks.Add((New-TrackObject -Path $p -Title $title -DurSec $dur)) | Out-Null
+    $added++
   }
-  Refresh-ListView
+  if($added -gt 0){
+    $script:lastIndex=$tracks.Count-1
+    Refresh-ListView -preserveSelection:$false
+  } else {
+    Refresh-ListView
+  }
 }
 $script:lastIndex=-1
 $list.Add_ItemSelectionChanged({ if ($_.IsSelected) { $script:lastIndex = $_.ItemIndex } })
 function Move-Selected([int]$delta){
   $idx = if ($list.SelectedIndices.Count -gt 0){ $list.SelectedIndices[0] } else { $script:lastIndex }
-  if($idx -lt 0){return}; $new=$idx+$delta; if($new -lt 0 -or $new -ge $tracks.Count){return}
-  $target=$new
+  if($idx -lt 0){return}
+  $target=$idx+$delta
+  if($target -lt 0){ $target=0 }
+  if($target -ge $tracks.Count){ $target=$tracks.Count-1 }
+  if($target -eq $idx){ return }
+
   $item=$tracks[$idx]
-  if($target -gt $idx){ $target-- }
   $tracks.RemoveAt($idx)
+  if($target -gt $tracks.Count){ $target=$tracks.Count }
   $tracks.Insert($target,$item)
-  Refresh-ListView
+  $script:lastIndex=$target
+
+  Refresh-ListView -preserveSelection:$false
   if($target -ge 0 -and $target -lt $list.Items.Count){
-    $list.Items[$target].Selected=$true; $list.EnsureVisible($target); $list.Select(); $script:lastIndex=$target
+    $list.Items[$target].Selected=$true
+    $list.EnsureVisible($target)
+    $list.Select()
   }
 }
 function Remove-Selected{
@@ -576,7 +677,8 @@ function Remove-Selected{
   $idxs=@(); foreach($i in $list.SelectedIndices){ $idxs += [int]$i }
   $idxs=$idxs|Sort-Object -Descending
   foreach($i in $idxs){ if($i -ge 0 -and $i -lt $tracks.Count){ $tracks.RemoveAt($i) } }
-  Refresh-ListView; $script:lastIndex=-1
+  $script:lastIndex=-1
+  Refresh-ListView -preserveSelection:$false
 }
 
 # Keyboard + DnD
@@ -645,7 +747,8 @@ $list.Add_DragDrop({
   $tracks.RemoveAt($script:dragIndex)
   if($idx -gt $tracks.Count){ $idx=$tracks.Count }
   $tracks.Insert($idx,$moving)
-  Refresh-ListView
+  $script:lastIndex=$idx
+  Refresh-ListView -preserveSelection:$false
   if($idx -ge 0 -and $idx -lt $list.Items.Count){
     $list.Items[$idx].Selected=$true
     $list.EnsureVisible($idx)
@@ -681,12 +784,26 @@ function Get-ShuffledTracks([System.Collections.IEnumerable]$items,[bool]$priori
   return Shuffle (@($source)) $rng
 }
 
+function Get-OutputStem([string]$base){
+  $stem = if([string]::IsNullOrWhiteSpace($base)){ 'merged' } else { $base.Trim() }
+  $stem = [regex]::Replace($stem,'[\\/:*?"<>|]+','_')
+  if($stem.Length -eq 0){ $stem='merged' }
+  if($stem -notmatch '_timestamp$'){ $stem+='_timestamp' }
+  return $stem
+}
+
 # Random(Preview): chỉ xáo thứ tự danh sách hiện có (không dùng Min/Max)
 $btnPreview.Add_Click({
   if ($tracks.Count -le 1) { return }
   $ordered=Get-ShuffledTracks $tracks $chkPriority.Checked
   $tracks.Clear(); foreach($t in $ordered){ $tracks.Add($t) } # giữ nguyên object -> giữ Star
-  Refresh-ListView
+  $script:lastIndex=0
+  Refresh-ListView -preserveSelection:$false
+})
+
+$chkRandom.Add_CheckedChanged({
+  $btnPreview.Visible=$chkRandom.Checked
+  Reflow-Bottom
 })
 
 function Merge-Once([System.Collections.IEnumerable]$sel,[string]$base,[bool]$isWav){
@@ -696,8 +813,9 @@ function Merge-Once([System.Collections.IEnumerable]$sel,[string]$base,[bool]$is
   $temp=Join-Path ([IO.Path]::GetTempPath()) ("merge_"+[guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Force -Path $temp|Out-Null
   $listFile=Join-Path $temp "list.txt"
-  $stamp   =Join-Path $outDir "$base`_timestamps.txt"
-  $outA    =Join-Path $outDir ($base+$(if($isWav){".wav"}else{".mp3"}))
+  $stem    =Get-OutputStem $base
+  $stamp   =Join-Path $outDir ($stem+".txt")
+  $outA    =Join-Path $outDir ($stem+$(if($isWav){".wav"}else{".mp3"}))
   try{
     $concat=@()
     for($i=0;$i -lt $selList.Count;$i++){
@@ -728,7 +846,7 @@ function Merge-Once([System.Collections.IEnumerable]$sel,[string]$base,[bool]$is
     if($p2.ExitCode -ne 0 -or -not (Test-Path $outA)){
       throw "ffmpeg concat failed (exit $($p2.ExitCode)).`n$err2"
     }
-    return $outA
+    return [pscustomobject]@{ Audio=$outA; Tracklist=$stamp }
   } finally { if(Test-Path $temp){ Remove-Item -Recurse -Force $temp } }
 }
 
@@ -747,15 +865,30 @@ $btnGen.Add_Click({
 
   try{
     if (-not $chkRandom.Checked) {
-      $null = Merge-Once -sel:$tracks -base:$base -isWav:$isWav
-      [System.Windows.Forms.MessageBox]::Show("Success!`nAudio/Timestamps đã xuất vào:`n$outDir","Completed",
-        [System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+      $merge = Merge-Once -sel:$tracks -base:$base -isWav:$isWav
+      if($merge){
+        $lblStatus1.Text="Done: " + (Split-Path $merge.Audio -Leaf)
+        $info=@(
+          "Success!",
+          "Exported files to:",
+          $outDir,
+          "",
+          "Files:",
+          "  " + (Split-Path $merge.Audio -Leaf),
+          "  " + (Split-Path $merge.Tracklist -Leaf)
+        )
+        [System.Windows.Forms.MessageBox]::Show(($info -join "`n"),"Completed",
+          [System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+      } else {
+        $lblStatus1.Text="Ready."
+      }
       return
     }
 
     $min=[int]$numMin.Value; $max=[int]$numMax.Value
     if ($max -lt $min) { $tmp=$min; $min=$max; $max=$tmp }
     $lists=[int]$numLists.Value
+    $exports=New-Object System.Collections.Generic.List[object]
     for ($i=1; $i -le $lists; $i++) {
       $k = $min + (Get-Random -Minimum 0 -Maximum ($max-$min+1))
       $k = [Math]::Min($k, $tracks.Count)
@@ -763,11 +896,27 @@ $btnGen.Add_Click({
       $ordered=Get-ShuffledTracks $tracks $chkPriority.Checked
       $sel=$ordered[0..($k-1)]
       $name = "{0}_{1:D2}" -f $base, $i
-      $null = Merge-Once -sel:$sel -base:$name -isWav:$isWav
+      $lblStatus1.Text="Merging list $i/$lists..."
+      $form.Refresh()
+      $merge = Merge-Once -sel:$sel -base:$name -isWav:$isWav
+      if($merge){ $exports.Add($merge) | Out-Null }
     }
-    [System.Windows.Forms.MessageBox]::Show("Success!`nĐã xuất $lists list vào:`n$outDir","Completed",
-      [System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    if($exports.Count -gt 0){
+      $lblStatus1.Text="Done: " + (Split-Path $exports[-1].Audio -Leaf)
+      $files=@("Success!","Created {0} list(s) in:" -f $exports.Count,$outDir,"","Files:")
+      foreach($item in $exports){
+        $files += "  " + (Split-Path $item.Audio -Leaf)
+        $files += "  " + (Split-Path $item.Tracklist -Leaf)
+      }
+      [System.Windows.Forms.MessageBox]::Show(($files -join "`n"),"Completed",
+        [System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    } else {
+      $lblStatus1.Text="Ready."
+      [System.Windows.Forms.MessageBox]::Show("Không có list nào được tạo (thiếu bài hát?).","Warning",
+        [System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+    }
   } catch {
+    $lblStatus1.Text="Error."
     [System.Windows.Forms.MessageBox]::Show("Lỗi khi gộp: $($_.Exception.Message)","Error",
       [System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
   }
@@ -777,7 +926,7 @@ $btnGen.Add_Click({
 # TAB 2: Điều chỉnh Tracklist
 # =========================================================
 $tab2=New-Object System.Windows.Forms.TabPage
-$tab2.Text="Điều chỉnh Tracklist"; $tab2.ImageKey='adjust'
+$tab2.Text="Adjust Tracklist"; $tab2.ImageKey='adjust'
 $tabs.TabPages.Add($tab2)
 
 $tlp=New-Object System.Windows.Forms.TableLayoutPanel
@@ -870,7 +1019,8 @@ $btnRun2.Add_Click({
 function Reset-Toolkit{
   $tracks.Clear()
   if($list.SelectedIndices.Count -gt 0){ $list.SelectedIndices.Clear() }
-  Refresh-ListView
+  $script:lastIndex=-1
+  Refresh-ListView -preserveSelection:$false
   $chkRandom.Checked=$false
   $chkPriority.Checked=$false
   $numLists.Value=1
